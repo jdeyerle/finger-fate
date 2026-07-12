@@ -1,3 +1,3 @@
 # CLAUDE.md
 
-Import `AGENTS.md`.
+@AGENTS.md
