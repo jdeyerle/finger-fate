@@ -1,26 +1,19 @@
 import SwiftUI
 import UIKit
 
-private enum Phase: Equatable {
-    case idle
-    case tracking
-    case choosing(highlighted: TouchID)
-    case selected(winner: TouchID)
-}
-
 private let backgroundColor = Color(red: 13 / 255, green: 21 / 255, blue: 36 / 255)
 private let slateColor = Color(red: 74 / 255, green: 85 / 255, blue: 104 / 255)
 private let winnerColor = Color(red: 168 / 255, green: 85 / 255, blue: 247 / 255)
 private let circleDiameter: CGFloat = 110
-private let stabilityDelay: Duration = .milliseconds(1500)
-private let hopCycles = 3
+
+private typealias LiveRoundEngine = RoundEngine<SystemRandomNumberGenerator>
 
 struct ContentView: View {
     @State private var touches: [TouchID: CGPoint] = [:]
-    @State private var phase: Phase = .idle
+    @State private var engine = LiveRoundEngine(generator: SystemRandomNumberGenerator())
+    @State private var phase: LiveRoundEngine.Phase = .idle
     @State private var pulse = false
-    @State private var stabilityTask: Task<Void, Never>?
-    @State private var resetTask: Task<Void, Never>?
+    @State private var timerTask: Task<Void, Never>?
 
     var body: some View {
         ZStack {
@@ -55,74 +48,34 @@ struct ContentView: View {
     }
 
     private func handleTouches(_ points: [TouchID: CGPoint]) {
-        let previousIDs = Set(touches.keys)
         touches = points
-        let currentIDs = Set(points.keys)
-
-        if currentIDs.isEmpty {
-            scheduleReset()
-            return
-        }
-        resetTask?.cancel()
-
-        if currentIDs != previousIDs {
-            restartStabilityTimer()
-        }
+        perform(engine.touchesChanged(Array(points.keys)))
     }
 
-    private func restartStabilityTimer() {
-        stabilityTask?.cancel()
-        if case .selected = phase { phase = .tracking }
-        if case .choosing = phase { phase = .tracking }
-        if phase == .idle { phase = .tracking }
-
-        let candidates = Array(touches.keys)
-        guard candidates.count >= 2 else {
-            phase = .tracking
-            return
+    private func perform(_ effects: [LiveRoundEngine.Effect]) {
+        for effect in effects {
+            switch effect {
+            case let .scheduleTimer(after, generation):
+                timerTask?.cancel()
+                timerTask = Task {
+                    try? await Task.sleep(for: after)
+                    guard !Task.isCancelled else { return }
+                    perform(engine.timerFired(generation: generation))
+                }
+            case .hopHaptic:
+                UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.6)
+            case .winnerHaptic:
+                UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+            }
         }
-
-        stabilityTask = Task {
-            try? await Task.sleep(for: stabilityDelay)
-            guard !Task.isCancelled else { return }
-            await beginChoosing()
-        }
+        syncPhase()
     }
 
-    @MainActor
-    private func beginChoosing() async {
-        var generator = SystemRandomNumberGenerator()
-        guard let winner = ChooserRound.selectWinner(from: Array(touches.keys), using: &generator) else {
-            return
-        }
-        let hops = ChooserRound.hopSequence(through: Array(touches.keys), endingAt: winner, cycles: hopCycles)
-        let hopHaptic = UIImpactFeedbackGenerator(style: .light)
-        for (index, id) in hops.enumerated() {  // sequential: each hop is a timed animation step
-            guard !Task.isCancelled else { return }
-            phase = .choosing(highlighted: id)
-            hopHaptic.impactOccurred(intensity: 0.6)
-            try? await Task.sleep(for: hopDelay(index, of: hops.count))
-        }
-        guard !Task.isCancelled, case .choosing = phase else { return }
-        UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
-        withAnimation(.easeOut(duration: 0.3)) {
-            phase = .selected(winner: winner)
-        }
-    }
-
-    // decelerating roulette: hops start fast and stretch out toward the winner
-    private func hopDelay(_ index: Int, of total: Int) -> Duration {
-        let fraction = total > 1 ? Double(index) / Double(total - 1) : 1
-        return .milliseconds(Int(70 + 330 * fraction * fraction))
-    }
-
-    private func scheduleReset() {
-        stabilityTask?.cancel()
-        resetTask?.cancel()
-        resetTask = Task {
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled, touches.isEmpty else { return }
-            phase = .idle
+    private func syncPhase() {
+        if case .selected = engine.phase {
+            withAnimation(.easeOut(duration: 0.3)) { phase = engine.phase }
+        } else {
+            phase = engine.phase
         }
     }
 }

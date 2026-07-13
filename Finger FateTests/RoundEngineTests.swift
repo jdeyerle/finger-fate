@@ -98,6 +98,16 @@ struct RoundEngineTests {
         #expect(effects == [.scheduleTimer(after: .milliseconds(1500), generation: 3)])
     }
 
+    @Test func liftingOneFingerMidRouletteRestartsCountdownWithRemainingFingers() {
+        var engine = makeEngine()
+        let ids = makeIDs(3)
+        _ = engine.touchesChanged(ids)
+        _ = engine.timerFired(generation: 1)
+        let effects = engine.touchesChanged(Array(ids.dropLast()))
+        #expect(engine.phase == .tracking)
+        #expect(effects == [.scheduleTimer(after: .milliseconds(1500), generation: 2)])
+    }
+
     @Test func staleTimerFromEarlierTouchSetIsIgnored() {
         var engine = makeEngine()
         _ = engine.touchesChanged(makeIDs(2))

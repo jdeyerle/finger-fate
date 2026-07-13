@@ -14,6 +14,9 @@ struct RoundEngine<Generator: RandomNumberGenerator> {
         case winnerHaptic
     }
 
+    static var stabilityDelay: Duration { .milliseconds(1500) }
+    private static var hopCycles: Int { 3 }
+
     private(set) var phase: Phase = .idle
     private var generator: Generator
     private var generation = 0
@@ -38,7 +41,7 @@ struct RoundEngine<Generator: RandomNumberGenerator> {
         phase = .tracking
         candidates = candidates.filter(ids.contains) + ids.filter { !candidates.contains($0) }
         guard candidates.count >= 2 else { return [] }
-        return [.scheduleTimer(after: .milliseconds(1500), generation: generation)]
+        return [.scheduleTimer(after: Self.stabilityDelay, generation: generation)]
     }
 
     mutating func timerFired(generation firedGeneration: Int) -> [Effect] {
@@ -46,7 +49,7 @@ struct RoundEngine<Generator: RandomNumberGenerator> {
         switch phase {
         case .tracking:
             guard let winner = ChooserRound.selectWinner(from: candidates, using: &generator) else { return [] }
-            hops = ChooserRound.hopSequence(through: candidates, endingAt: winner, cycles: 3)
+            hops = ChooserRound.hopSequence(through: candidates, endingAt: winner, cycles: Self.hopCycles)
             hopIndex = 0
             phase = .choosing(highlighted: hops[0])
             return [.hopHaptic, .scheduleTimer(after: hopDelay(0), generation: generation)]
