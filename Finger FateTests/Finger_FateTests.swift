@@ -45,6 +45,20 @@ struct ChooserRoundTests {
         #expect(a == b)
     }
 
+    @Test func hopSequenceEndsAtWinnerAndVisitsAllCandidates() {
+        let ids = makeIDs(4)
+        let hops = ChooserRound.hopSequence(through: ids, endingAt: ids[1], cycles: 3)
+        #expect(hops.last == ids[1])
+        #expect(Set(hops) == Set(ids))
+        #expect(hops.count == 2 * ids.count + 2)
+    }
+
+    @Test func hopSequenceIsEmptyWhenWinnerNotACandidate() {
+        let ids = makeIDs(4)
+        let candidates = Array(ids.prefix(3))
+        #expect(ChooserRound.hopSequence(through: candidates, endingAt: ids[3], cycles: 3).isEmpty)
+    }
+
     @Test func selectsExactlyOneWinner() {
         let ids = makeIDs(3)
         var gen = SeededGenerator(seed: 7)

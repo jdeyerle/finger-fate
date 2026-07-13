@@ -4,7 +4,7 @@ import UIKit
 private enum Phase: Equatable {
     case idle
     case tracking
-    case choosing(winner: TouchID)
+    case choosing(highlighted: TouchID)
     case selected(winner: TouchID)
 }
 
@@ -13,13 +13,12 @@ private let slateColor = Color(red: 74 / 255, green: 85 / 255, blue: 104 / 255)
 private let winnerColor = Color(red: 168 / 255, green: 85 / 255, blue: 247 / 255)
 private let circleDiameter: CGFloat = 110
 private let stabilityDelay: Duration = .milliseconds(1500)
-private let countdownDuration: Duration = .milliseconds(1500)
+private let hopCycles = 3
 
 struct ContentView: View {
     @State private var touches: [TouchID: CGPoint] = [:]
     @State private var phase: Phase = .idle
     @State private var pulse = false
-    @State private var countdownProgress: CGFloat = 0
     @State private var stabilityTask: Task<Void, Never>?
     @State private var resetTask: Task<Void, Never>?
 
@@ -29,7 +28,7 @@ struct ContentView: View {
 
             ForEach(Array(touches.keys), id: \.self) { id in
                 if let point = touches[id] {
-                    FingerCircle(isWinner: isWinner(id), progress: countdownProgress, pulse: pulse)
+                    FingerCircle(state: circleState(id), pulse: pulse)
                         .position(point)
                 }
             }
@@ -46,10 +45,12 @@ struct ContentView: View {
         }
     }
 
-    private func isWinner(_ id: TouchID) -> Bool {
+    private func circleState(_ id: TouchID) -> FingerCircle.State {
         switch phase {
-        case let .choosing(winner), let .selected(winner): return winner == id
-        default: return false
+        case let .choosing(highlighted) where highlighted == id: return .highlighted
+        case let .selected(winner) where winner == id: return .winner
+        case .selected: return .loser
+        default: return .waiting
         }
     }
 
@@ -94,18 +95,25 @@ struct ContentView: View {
         guard let winner = ChooserRound.selectWinner(from: Array(touches.keys), using: &generator) else {
             return
         }
-        phase = .choosing(winner: winner)
-        countdownProgress = 0
-        withAnimation(.linear(duration: countdownDuration.seconds)) {
-            countdownProgress = 0.85
+        let hops = ChooserRound.hopSequence(through: Array(touches.keys), endingAt: winner, cycles: hopCycles)
+        let hopHaptic = UIImpactFeedbackGenerator(style: .light)
+        for (index, id) in hops.enumerated() {  // sequential: each hop is a timed animation step
+            guard !Task.isCancelled, phase != .idle, phase != .tracking else { return }
+            phase = .choosing(highlighted: id)
+            hopHaptic.impactOccurred(intensity: 0.6)
+            try? await Task.sleep(for: hopDelay(index, of: hops.count))
         }
-        try? await Task.sleep(for: countdownDuration)
         guard !Task.isCancelled, case .choosing = phase else { return }
         UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
         withAnimation(.easeOut(duration: 0.3)) {
             phase = .selected(winner: winner)
-            countdownProgress = 1
         }
+    }
+
+    // decelerating roulette: hops start fast and stretch out toward the winner
+    private func hopDelay(_ index: Int, of total: Int) -> Duration {
+        let fraction = total > 1 ? Double(index) / Double(total - 1) : 1
+        return .milliseconds(Int(70 + 330 * fraction * fraction))
     }
 
     private func scheduleReset() {
@@ -120,43 +128,42 @@ struct ContentView: View {
 }
 
 private struct FingerCircle: View {
-    let isWinner: Bool
-    let progress: CGFloat
+    enum State {
+        case waiting
+        case highlighted
+        case winner
+        case loser
+    }
+
+    let state: State
     let pulse: Bool
 
     var body: some View {
         ZStack {
             Circle()
                 .stroke(
-                    slateColor.opacity(isWinner ? 0.2 : 0.7),
+                    slateColor.opacity(state == .loser ? 0.25 : 0.7),
                     style: StrokeStyle(lineWidth: 5, dash: [8, 8])
                 )
-            if isWinner {
+            if state == .highlighted || state == .winner {
                 Circle()
-                    .trim(from: 0, to: progress)
+                    .trim(from: 0, to: state == .winner ? 1 : 0.85)
                     .stroke(winnerColor, style: StrokeStyle(lineWidth: 6, lineCap: .round))
                     .rotationEffect(.degrees(-90))
             }
         }
         .frame(width: circleDiameter, height: circleDiameter)
-        .scaleEffect(pulse && !isWinner ? 1.04 : 1)
+        .scaleEffect(pulse && state == .waiting ? 1.04 : 1)
     }
 }
 
 #Preview("Choosing") {
     ZStack {
         backgroundColor.ignoresSafeArea()
-        FingerCircle(isWinner: false, progress: 0, pulse: false).position(x: 140, y: 180)
-        FingerCircle(isWinner: false, progress: 0, pulse: false).position(x: 260, y: 130)
-        FingerCircle(isWinner: false, progress: 0, pulse: false).position(x: 350, y: 300)
-        FingerCircle(isWinner: false, progress: 0, pulse: false).position(x: 90, y: 480)
-        FingerCircle(isWinner: true, progress: 0.85, pulse: false).position(x: 210, y: 600)
-    }
-}
-
-private extension Duration {
-    var seconds: Double {
-        let (secs, atto) = components
-        return Double(secs) + Double(atto) / 1e18
+        FingerCircle(state: .waiting, pulse: false).position(x: 140, y: 180)
+        FingerCircle(state: .waiting, pulse: false).position(x: 260, y: 130)
+        FingerCircle(state: .waiting, pulse: false).position(x: 350, y: 300)
+        FingerCircle(state: .waiting, pulse: false).position(x: 90, y: 480)
+        FingerCircle(state: .highlighted, pulse: false).position(x: 210, y: 600)
     }
 }
