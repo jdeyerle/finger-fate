@@ -98,7 +98,7 @@ struct ContentView: View {
         let hops = ChooserRound.hopSequence(through: Array(touches.keys), endingAt: winner, cycles: hopCycles)
         let hopHaptic = UIImpactFeedbackGenerator(style: .light)
         for (index, id) in hops.enumerated() {  // sequential: each hop is a timed animation step
-            guard !Task.isCancelled, phase != .idle, phase != .tracking else { return }
+            guard !Task.isCancelled else { return }
             phase = .choosing(highlighted: id)
             hopHaptic.impactOccurred(intensity: 0.6)
             try? await Task.sleep(for: hopDelay(index, of: hops.count))
