@@ -1,13 +1,6 @@
 import SwiftUI
 import UIKit
 
-private enum Phase: Equatable {
-    case idle
-    case tracking
-    case choosing(highlighted: TouchID)
-    case selected(winner: TouchID)
-}
-
 private let fingerPalette: [Color] = [
     Color(red: 0.96, green: 0.36, blue: 0.31),
     Color(red: 0.97, green: 0.77, blue: 0.27),
@@ -20,16 +13,16 @@ private let fingerPalette: [Color] = [
 ]
 private let hintBackground = Color(red: 0.16, green: 0.16, blue: 0.17)
 private let circleDiameter: CGFloat = 110
-private let stabilityDelay: Duration = .milliseconds(1500)
-private let hopCycles = 3
+
+private typealias LiveRoundEngine = RoundEngine<SystemRandomNumberGenerator>
 
 struct ContentView: View {
     @State private var touches: [TouchID: CGPoint] = [:]
     @State private var colorIndices: [TouchID: Int] = [:]
-    @State private var phase: Phase = .idle
+    @State private var engine = LiveRoundEngine(generator: SystemRandomNumberGenerator())
+    @State private var phase: LiveRoundEngine.Phase = .idle
     @State private var pulse = false
-    @State private var stabilityTask: Task<Void, Never>?
-    @State private var resetTask: Task<Void, Never>?
+    @State private var timerTask: Task<Void, Never>?
 
     var body: some View {
         ZStack {
@@ -38,8 +31,8 @@ struct ContentView: View {
             ForEach(Array(touches.keys), id: \.self) { id in
                 if let point = touches[id] {
                     FingerBlob(state: blobState(id), color: fingerColor(id), pulse: pulse)
-                    .position(point)
-                    .animation(.spring(duration: 0.35), value: phase)
+                        .position(point)
+                        .animation(.spring(duration: 0.35), value: phase)
                 }
             }
 
@@ -78,10 +71,6 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.25), value: touches.isEmpty)
     }
 
-    private func fingerColor(_ id: TouchID) -> Color {
-        fingerPalette[colorIndices[id, default: 0] % fingerPalette.count]
-    }
-
     private func winnerBanner(color: Color) -> some View {
         VStack {
             Spacer()
@@ -98,6 +87,10 @@ struct ContentView: View {
         .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
+    private func fingerColor(_ id: TouchID) -> Color {
+        fingerPalette[colorIndices[id, default: 0] % fingerPalette.count]
+    }
+
     private func blobState(_ id: TouchID) -> FingerBlob.State {
         switch phase {
         case let .choosing(highlighted) where highlighted == id: return .highlighted
@@ -108,20 +101,14 @@ struct ContentView: View {
     }
 
     private func handleTouches(_ points: [TouchID: CGPoint]) {
-        let previousIDs = Set(touches.keys)
+        let newIDs = Set(points.keys).subtracting(touches.keys)
         touches = points
-        assignColors(to: Set(points.keys).subtracting(previousIDs))
-        let currentIDs = Set(points.keys)
-
-        if currentIDs.isEmpty {
-            scheduleReset()
-            return
+        if points.isEmpty {
+            colorIndices = [:]
+        } else {
+            assignColors(to: newIDs)
         }
-        resetTask?.cancel()
-
-        if currentIDs != previousIDs {
-            restartStabilityTimer()
-        }
+        perform(engine.touchesChanged(Array(points.keys)))
     }
 
     private func assignColors(to newIDs: Set<TouchID>) {
@@ -133,66 +120,30 @@ struct ContentView: View {
         }
     }
 
-    private func restartStabilityTimer() {
-        stabilityTask?.cancel()
-        if case .selected = phase { phase = .tracking }
-        if case .choosing = phase { phase = .tracking }
-        if phase == .idle { phase = .tracking }
-
-        let candidates = Array(touches.keys)
-        guard candidates.count >= 2 else {
-            phase = .tracking
-            return
+    private func perform(_ effects: [LiveRoundEngine.Effect]) {
+        for effect in effects {
+            switch effect {
+            case let .scheduleTimer(after, generation):
+                timerTask?.cancel()
+                timerTask = Task {
+                    try? await Task.sleep(for: after)
+                    guard !Task.isCancelled else { return }
+                    perform(engine.timerFired(generation: generation))
+                }
+            case let .hopHaptic(intensity):
+                UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: intensity)
+            case .winnerHaptic:
+                UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+            }
         }
-
-        stabilityTask = Task {
-            try? await Task.sleep(for: stabilityDelay)
-            guard !Task.isCancelled else { return }
-            await beginChoosing()
-        }
+        syncPhase()
     }
 
-    @MainActor
-    private func beginChoosing() async {
-        var generator = SystemRandomNumberGenerator()
-        guard let winner = ChooserRound.selectWinner(from: Array(touches.keys), using: &generator) else {
-            return
-        }
-        let candidates = Array(touches.keys)
-        // small groups still deserve a full spin-down ritual (~12 ticks minimum)
-        let cycles = max(hopCycles, Int((12.0 / Double(candidates.count)).rounded(.up)))
-        let hops = ChooserRound.hopSequence(through: candidates, endingAt: winner, cycles: cycles)
-        let hopHaptic = UIImpactFeedbackGenerator(style: .light)
-        let finalTick = Double.random(in: 480...620, using: &generator)
-        for (index, id) in hops.enumerated() {  // sequential: each hop is a timed animation step
-            guard !Task.isCancelled else { return }
-            phase = .choosing(highlighted: id)
-            let fraction = hops.count > 1 ? Double(index) / Double(hops.count - 1) : 1
-            hopHaptic.impactOccurred(intensity: 0.4 + 0.5 * fraction)
-            try? await Task.sleep(for: tickDelay(fraction: fraction, finalTick: finalTick))
-        }
-        guard !Task.isCancelled, case .choosing = phase else { return }
-        try? await Task.sleep(for: .milliseconds(420))
-        guard !Task.isCancelled, case .choosing = phase else { return }
-        UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
-        withAnimation(.spring(duration: 0.5, bounce: 0.5)) {
-            phase = .selected(winner: winner)
-        }
-    }
-
-    // exponential friction decay, randomized per round: ticks stretch from ~55ms to finalTick
-    private func tickDelay(fraction: Double, finalTick: Double) -> Duration {
-        .milliseconds(Int(55 * pow(finalTick / 55, fraction)))
-    }
-
-    private func scheduleReset() {
-        stabilityTask?.cancel()
-        resetTask?.cancel()
-        resetTask = Task {
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled, touches.isEmpty else { return }
-            phase = .idle
-            colorIndices = [:]
+    private func syncPhase() {
+        if case .selected = engine.phase {
+            withAnimation(.spring(duration: 0.5, bounce: 0.5)) { phase = engine.phase }
+        } else {
+            phase = engine.phase
         }
     }
 }
