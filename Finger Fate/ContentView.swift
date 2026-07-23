@@ -37,11 +37,7 @@ struct ContentView: View {
 
             ForEach(Array(touches.keys), id: \.self) { id in
                 if let point = touches[id] {
-                    FingerBlob(
-                        state: blobState(id),
-                        color: fingerPalette[colorIndices[id, default: 0] % fingerPalette.count],
-                        pulse: pulse
-                    )
+                    FingerBlob(state: blobState(id), color: fingerColor(id), pulse: pulse)
                     .position(point)
                     .animation(.spring(duration: 0.35), value: phase)
                 }
@@ -49,6 +45,10 @@ struct ContentView: View {
 
             if touches.count < 2 {
                 hintPill
+            }
+
+            if case let .selected(winner) = phase {
+                winnerBanner(color: fingerColor(winner))
             }
 
             MultiTouchView(onChange: handleTouches)
@@ -76,6 +76,26 @@ struct ContentView: View {
         }
         .transition(.opacity)
         .animation(.easeInOut(duration: 0.25), value: touches.isEmpty)
+    }
+
+    private func fingerColor(_ id: TouchID) -> Color {
+        fingerPalette[colorIndices[id, default: 0] % fingerPalette.count]
+    }
+
+    private func winnerBanner(color: Color) -> some View {
+        VStack {
+            Spacer()
+            VStack(spacing: 2) {
+                Text("Fate has")
+                    .foregroundStyle(.white)
+                Text("chosen")
+                    .foregroundStyle(color)
+            }
+            .font(.system(size: 44, weight: .bold, design: .serif))
+            .italic()
+            .padding(.bottom, 80)
+        }
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
     private func blobState(_ id: TouchID) -> FingerBlob.State {
@@ -194,8 +214,8 @@ private struct FingerBlob: View {
         }
         .frame(width: circleDiameter, height: circleDiameter)
         .scaleEffect(scale)
-        .opacity(state == .loser ? 0.25 : 1)
-        .shadow(color: color.opacity(state == .waiting ? 0 : 0.6), radius: 24)
+        .opacity(state == .loser ? 0.12 : 1)
+        .shadow(color: color.opacity(shadowOpacity), radius: state == .winner ? 40 : 24)
     }
 
     private var shape: AnyShape {
@@ -206,8 +226,16 @@ private struct FingerBlob: View {
         switch state {
         case .waiting: return pulse ? 1.05 : 1
         case .highlighted: return 1.18
-        case .winner: return 1.35
-        case .loser: return 0.85
+        case .winner: return 1.5
+        case .loser: return 0.7
+        }
+    }
+
+    private var shadowOpacity: Double {
+        switch state {
+        case .waiting, .loser: return 0
+        case .highlighted: return 0.6
+        case .winner: return 0.9
         }
     }
 }
