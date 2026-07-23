@@ -37,17 +37,17 @@ struct RoundEngineTests {
         _ = engine.touchesChanged(ids)
         let effects = engine.timerFired(generation: 1)
         #expect(engine.phase == .choosing(highlighted: ids[0]))
-        #expect(effects.first == .hopHaptic)
+        #expect(effects.first == .hopHaptic(intensity: 0.4))
         #expect(effects.count == 2)
         if case let .scheduleTimer(after, generation) = effects[1] {
-            #expect(after == .milliseconds(70))
+            #expect(after == .milliseconds(55))
             #expect(generation == 1)
         } else {
             Issue.record("expected a scheduled hop, got \(effects)")
         }
     }
 
-    @Test func rouletteCyclesEveryFingerDeceleratesAndLocksWinnerWithHaptic() {
+    @Test func rouletteCyclesEveryFingerDeceleratesHoldsForSuspenseThenLocksWinnerWithHaptic() {
         var engine = makeEngine(seed: 42)
         let ids = makeIDs(3)
         _ = engine.touchesChanged(ids)
@@ -65,8 +65,12 @@ struct RoundEngineTests {
             effects = engine.timerFired(generation: generation)
         }
         #expect(Set(highlights) == Set(ids))
-        #expect(delays == delays.sorted())
-        #expect(delays.first! < delays.last!)
+        let hopDelays = delays.dropLast()
+        #expect(hopDelays.count >= 12)
+        #expect(Array(hopDelays) == hopDelays.sorted())
+        #expect(hopDelays.first! == .milliseconds(55))
+        #expect(hopDelays.last! >= .milliseconds(480) && hopDelays.last! <= .milliseconds(620))
+        #expect(delays.last == RoundEngine<SeededGenerator>.suspenseHold)
         #expect(effects.contains(.winnerHaptic))
         guard case let .selected(winner) = engine.phase else {
             Issue.record("expected a selected winner, ended in \(engine.phase)")

@@ -10,12 +10,15 @@ struct RoundEngine<Generator: RandomNumberGenerator> {
 
     enum Effect: Equatable {
         case scheduleTimer(after: Duration, generation: Int)
-        case hopHaptic
+        case hopHaptic(intensity: Double)
         case winnerHaptic
     }
 
     static var stabilityDelay: Duration { .milliseconds(1500) }
-    private static var hopCycles: Int { 3 }
+    static var suspenseHold: Duration { .milliseconds(420) }
+    private static var minimumCycles: Int { 3 }
+    private static var minimumHops: Int { 12 }
+    private static var firstHopMilliseconds: Double { 55 }
 
     private(set) var phase: Phase = .idle
     private var generator: Generator
@@ -23,6 +26,7 @@ struct RoundEngine<Generator: RandomNumberGenerator> {
     private var candidates: [TouchID] = []
     private var hops: [TouchID] = []
     private var hopIndex = 0
+    private var finalHopMilliseconds: Double = 480
 
     init(generator: Generator) {
         self.generator = generator
@@ -49,26 +53,40 @@ struct RoundEngine<Generator: RandomNumberGenerator> {
         switch phase {
         case .tracking:
             guard let winner = ChooserRound.selectWinner(from: candidates, using: &generator) else { return [] }
-            hops = ChooserRound.hopSequence(through: candidates, endingAt: winner, cycles: Self.hopCycles)
+            // hopSequence truncates at the winner, so guarantee minimumHops even in the worst case
+            let cycles = max(Self.minimumCycles, Int((Double(Self.minimumHops - 1) / Double(candidates.count)).rounded(.up)) + 1)
+            hops = ChooserRound.hopSequence(through: candidates, endingAt: winner, cycles: cycles)
             hopIndex = 0
+            finalHopMilliseconds = Double.random(in: 480...620, using: &generator)
             phase = .choosing(highlighted: hops[0])
-            return [.hopHaptic, .scheduleTimer(after: hopDelay(0), generation: generation)]
+            return [.hopHaptic(intensity: hopIntensity(0)), .scheduleTimer(after: hopDelay(0), generation: generation)]
         case .choosing:
             hopIndex += 1
-            guard hopIndex < hops.count else {
-                phase = .selected(winner: hops[hops.count - 1])
-                return [.winnerHaptic]
+            if hopIndex < hops.count {
+                phase = .choosing(highlighted: hops[hopIndex])
+                return [.hopHaptic(intensity: hopIntensity(hopIndex)), .scheduleTimer(after: hopDelay(hopIndex), generation: generation)]
             }
-            phase = .choosing(highlighted: hops[hopIndex])
-            return [.hopHaptic, .scheduleTimer(after: hopDelay(hopIndex), generation: generation)]
+            if hopIndex == hops.count {
+                // suspense hold: the winner stays merely highlighted for a beat before lock-in
+                return [.scheduleTimer(after: Self.suspenseHold, generation: generation)]
+            }
+            phase = .selected(winner: hops[hops.count - 1])
+            return [.winnerHaptic]
         case .idle, .selected:
             return []
         }
     }
 
-    // decelerating roulette: hops start fast and stretch out toward the winner
+    // exponential friction decay, randomized per round: hops stretch geometrically toward the final hop
     private func hopDelay(_ index: Int) -> Duration {
-        let fraction = hops.count > 1 ? Double(index) / Double(hops.count - 1) : 1
-        return .milliseconds(Int(70 + 330 * fraction * fraction))
+        .milliseconds(Int(Self.firstHopMilliseconds * pow(finalHopMilliseconds / Self.firstHopMilliseconds, hopFraction(index))))
+    }
+
+    private func hopIntensity(_ index: Int) -> Double {
+        0.4 + 0.5 * hopFraction(index)
+    }
+
+    private func hopFraction(_ index: Int) -> Double {
+        hops.count > 1 ? Double(index) / Double(hops.count - 1) : 1
     }
 }
