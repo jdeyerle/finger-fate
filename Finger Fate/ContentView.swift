@@ -158,25 +158,31 @@ struct ContentView: View {
         guard let winner = ChooserRound.selectWinner(from: Array(touches.keys), using: &generator) else {
             return
         }
-        let hops = ChooserRound.hopSequence(through: Array(touches.keys), endingAt: winner, cycles: hopCycles)
+        let candidates = Array(touches.keys)
+        // small groups still deserve a full spin-down ritual (~12 ticks minimum)
+        let cycles = max(hopCycles, Int((12.0 / Double(candidates.count)).rounded(.up)))
+        let hops = ChooserRound.hopSequence(through: candidates, endingAt: winner, cycles: cycles)
         let hopHaptic = UIImpactFeedbackGenerator(style: .light)
+        let finalTick = Double.random(in: 480...620, using: &generator)
         for (index, id) in hops.enumerated() {  // sequential: each hop is a timed animation step
             guard !Task.isCancelled else { return }
             phase = .choosing(highlighted: id)
-            hopHaptic.impactOccurred(intensity: 0.6)
-            try? await Task.sleep(for: hopDelay(index, of: hops.count))
+            let fraction = hops.count > 1 ? Double(index) / Double(hops.count - 1) : 1
+            hopHaptic.impactOccurred(intensity: 0.4 + 0.5 * fraction)
+            try? await Task.sleep(for: tickDelay(fraction: fraction, finalTick: finalTick))
         }
         guard !Task.isCancelled, case .choosing = phase else { return }
+        try? await Task.sleep(for: .milliseconds(420))
+        guard !Task.isCancelled, case .choosing = phase else { return }
         UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
-        withAnimation(.spring(duration: 0.45, bounce: 0.4)) {
+        withAnimation(.spring(duration: 0.5, bounce: 0.5)) {
             phase = .selected(winner: winner)
         }
     }
 
-    // decelerating roulette: hops start fast and stretch out toward the winner
-    private func hopDelay(_ index: Int, of total: Int) -> Duration {
-        let fraction = total > 1 ? Double(index) / Double(total - 1) : 1
-        return .milliseconds(Int(70 + 330 * fraction * fraction))
+    // exponential friction decay, randomized per round: ticks stretch from ~55ms to finalTick
+    private func tickDelay(fraction: Double, finalTick: Double) -> Duration {
+        .milliseconds(Int(55 * pow(finalTick / 55, fraction)))
     }
 
     private func scheduleReset() {
