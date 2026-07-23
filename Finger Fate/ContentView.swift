@@ -8,15 +8,24 @@ private enum Phase: Equatable {
     case selected(winner: TouchID)
 }
 
-private let backgroundColor = Color(red: 13 / 255, green: 21 / 255, blue: 36 / 255)
-private let slateColor = Color(red: 74 / 255, green: 85 / 255, blue: 104 / 255)
-private let winnerColor = Color(red: 168 / 255, green: 85 / 255, blue: 247 / 255)
+private let fingerPalette: [Color] = [
+    Color(red: 0.96, green: 0.36, blue: 0.31),
+    Color(red: 0.97, green: 0.77, blue: 0.27),
+    Color(red: 0.20, green: 0.83, blue: 0.51),
+    Color(red: 0.43, green: 0.51, blue: 0.96),
+    Color(red: 0.97, green: 0.60, blue: 0.23),
+    Color(red: 0.31, green: 0.89, blue: 0.76),
+    Color(red: 0.71, green: 0.44, blue: 0.96),
+    Color(red: 0.39, green: 0.72, blue: 0.95),
+]
+private let hintBackground = Color(red: 0.16, green: 0.16, blue: 0.17)
 private let circleDiameter: CGFloat = 110
 private let stabilityDelay: Duration = .milliseconds(1500)
 private let hopCycles = 3
 
 struct ContentView: View {
     @State private var touches: [TouchID: CGPoint] = [:]
+    @State private var colorIndices: [TouchID: Int] = [:]
     @State private var phase: Phase = .idle
     @State private var pulse = false
     @State private var stabilityTask: Task<Void, Never>?
@@ -24,13 +33,22 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            backgroundColor.ignoresSafeArea()
+            Color.black.ignoresSafeArea()
 
             ForEach(Array(touches.keys), id: \.self) { id in
                 if let point = touches[id] {
-                    FingerCircle(state: circleState(id), pulse: pulse)
-                        .position(point)
+                    FingerBlob(
+                        state: blobState(id),
+                        color: fingerPalette[colorIndices[id, default: 0] % fingerPalette.count],
+                        pulse: pulse
+                    )
+                    .position(point)
+                    .animation(.spring(duration: 0.35), value: phase)
                 }
+            }
+
+            if touches.count < 2 {
+                hintPill
             }
 
             MultiTouchView(onChange: handleTouches)
@@ -45,7 +63,22 @@ struct ContentView: View {
         }
     }
 
-    private func circleState(_ id: TouchID) -> FingerCircle.State {
+    private var hintPill: some View {
+        VStack {
+            Spacer()
+            Text(touches.isEmpty ? "Place your fingers on the screen" : "Add at least one more finger")
+                .font(.system(.body, design: .serif))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 14)
+                .background(hintBackground, in: Capsule())
+                .padding(.bottom, 48)
+        }
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.25), value: touches.isEmpty)
+    }
+
+    private func blobState(_ id: TouchID) -> FingerBlob.State {
         switch phase {
         case let .choosing(highlighted) where highlighted == id: return .highlighted
         case let .selected(winner) where winner == id: return .winner
@@ -57,6 +90,7 @@ struct ContentView: View {
     private func handleTouches(_ points: [TouchID: CGPoint]) {
         let previousIDs = Set(touches.keys)
         touches = points
+        assignColors(to: Set(points.keys).subtracting(previousIDs))
         let currentIDs = Set(points.keys)
 
         if currentIDs.isEmpty {
@@ -67,6 +101,15 @@ struct ContentView: View {
 
         if currentIDs != previousIDs {
             restartStabilityTimer()
+        }
+    }
+
+    private func assignColors(to newIDs: Set<TouchID>) {
+        // sequential: each new touch takes the next unused palette slot
+        for id in newIDs.sorted(by: { "\($0)" < "\($1)" }) {
+            let used = Set(colorIndices.values)
+            let free = (0..<fingerPalette.count).first { !used.contains($0) }
+            colorIndices[id] = free ?? colorIndices.count % fingerPalette.count
         }
     }
 
@@ -105,7 +148,7 @@ struct ContentView: View {
         }
         guard !Task.isCancelled, case .choosing = phase else { return }
         UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
-        withAnimation(.easeOut(duration: 0.3)) {
+        withAnimation(.spring(duration: 0.45, bounce: 0.4)) {
             phase = .selected(winner: winner)
         }
     }
@@ -123,11 +166,12 @@ struct ContentView: View {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, touches.isEmpty else { return }
             phase = .idle
+            colorIndices = [:]
         }
     }
 }
 
-private struct FingerCircle: View {
+private struct FingerBlob: View {
     enum State {
         case waiting
         case highlighted
@@ -136,34 +180,64 @@ private struct FingerCircle: View {
     }
 
     let state: State
+    let color: Color
     let pulse: Bool
 
     var body: some View {
         ZStack {
-            Circle()
-                .stroke(
-                    slateColor.opacity(state == .loser ? 0.25 : 0.7),
-                    style: StrokeStyle(lineWidth: 5, dash: [8, 8])
-                )
-            if state == .highlighted || state == .winner {
-                Circle()
-                    .trim(from: 0, to: state == .winner ? 1 : 0.85)
-                    .stroke(winnerColor, style: StrokeStyle(lineWidth: 6, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
+            shape
+                .fill(color.gradient)
+            if state == .winner {
+                FlowerShape()
+                    .stroke(.white.opacity(0.9), lineWidth: 3)
             }
         }
         .frame(width: circleDiameter, height: circleDiameter)
-        .scaleEffect(pulse && state == .waiting ? 1.04 : 1)
+        .scaleEffect(scale)
+        .opacity(state == .loser ? 0.25 : 1)
+        .shadow(color: color.opacity(state == .waiting ? 0 : 0.6), radius: 24)
+    }
+
+    private var shape: AnyShape {
+        state == .winner ? AnyShape(FlowerShape()) : AnyShape(Circle())
+    }
+
+    private var scale: CGFloat {
+        switch state {
+        case .waiting: return pulse ? 1.05 : 1
+        case .highlighted: return 1.18
+        case .winner: return 1.35
+        case .loser: return 0.85
+        }
+    }
+}
+
+private struct FlowerShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let base = min(rect.width, rect.height) / 2
+        let petals = 8.0
+        let steps = 240
+        // polar rose: r = base * (0.88 + 0.12·cos(petals·θ)) traces the scalloped petal edge
+        let points = (0...steps).map { step -> CGPoint in
+            let angle = Double(step) / Double(steps) * 2 * .pi
+            let radius = base * (0.88 + 0.12 * cos(petals * angle))
+            return CGPoint(x: center.x + cos(angle) * radius, y: center.y + sin(angle) * radius)
+        }
+        var path = Path()
+        path.addLines(points)
+        path.closeSubpath()
+        return path
     }
 }
 
 #Preview("Choosing") {
     ZStack {
-        backgroundColor.ignoresSafeArea()
-        FingerCircle(state: .waiting, pulse: false).position(x: 140, y: 180)
-        FingerCircle(state: .waiting, pulse: false).position(x: 260, y: 130)
-        FingerCircle(state: .waiting, pulse: false).position(x: 350, y: 300)
-        FingerCircle(state: .waiting, pulse: false).position(x: 90, y: 480)
-        FingerCircle(state: .highlighted, pulse: false).position(x: 210, y: 600)
+        Color.black.ignoresSafeArea()
+        FingerBlob(state: .waiting, color: fingerPalette[0], pulse: false).position(x: 140, y: 180)
+        FingerBlob(state: .waiting, color: fingerPalette[1], pulse: false).position(x: 260, y: 130)
+        FingerBlob(state: .loser, color: fingerPalette[2], pulse: false).position(x: 350, y: 300)
+        FingerBlob(state: .waiting, color: fingerPalette[3], pulse: false).position(x: 90, y: 480)
+        FingerBlob(state: .winner, color: fingerPalette[5], pulse: false).position(x: 210, y: 600)
     }
 }
