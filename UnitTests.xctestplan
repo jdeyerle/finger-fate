@@ -1,0 +1,24 @@
+{
+  "configurations" : [
+    {
+      "id" : "7A1D9C4E-3B62-4F8A-9D15-2C8E6F0A1B37",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:Finger Fate.xcodeproj",
+        "identifier" : "F58D82E630036A7F003B5F15",
+        "name" : "Finger FateTests"
+      }
+    }
+  ],
+  "version" : 1
+}
