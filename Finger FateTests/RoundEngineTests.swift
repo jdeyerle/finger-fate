@@ -22,6 +22,21 @@ private func makeEngine(seed: UInt64 = 1) -> RoundEngine<SeededGenerator> {
     RoundEngine(generator: SeededGenerator(seed: seed))
 }
 
+private func driveToSelection(_ engine: inout RoundEngine<SeededGenerator>, ids: [TouchID]) -> TouchID {
+    _ = engine.touchesChanged(ids)
+    var effects = engine.timerFired(generation: 1)
+    // sequential: each iteration replays the timer the previous hop scheduled
+    while case .choosing = engine.phase {
+        guard case let .scheduleTimer(_, generation) = effects.last else { break }
+        effects = engine.timerFired(generation: generation)
+    }
+    guard case let .selected(winner) = engine.phase else {
+        Issue.record("engine did not reach a selected winner, ended in \(engine.phase)")
+        return ids[0]
+    }
+    return winner
+}
+
 struct RoundEngineTests {
     @Test func twoFingersDownStartTrackingAndScheduleStabilityCountdown() {
         var engine = makeEngine()
@@ -108,6 +123,25 @@ struct RoundEngineTests {
         _ = engine.touchesChanged(ids)
         _ = engine.timerFired(generation: 1)
         let effects = engine.touchesChanged(Array(ids.dropLast()))
+        #expect(engine.phase == .tracking)
+        #expect(effects == [.scheduleTimer(after: .milliseconds(1500), generation: 2)])
+    }
+
+    @Test func loserLiftingAfterSelectionKeepsWinnerLocked() {
+        var engine = makeEngine(seed: 42)
+        let ids = makeIDs(3)
+        let winner = driveToSelection(&engine, ids: ids)
+        let firstLoser = ids.first { $0 != winner }!
+        let effects = engine.touchesChanged(ids.filter { $0 != firstLoser })
+        #expect(engine.phase == .selected(winner: winner))
+        #expect(effects.isEmpty)
+    }
+
+    @Test func winnerLiftingAfterSelectionStartsFreshRoundWithRemaining() {
+        var engine = makeEngine(seed: 42)
+        let ids = makeIDs(3)
+        let winner = driveToSelection(&engine, ids: ids)
+        let effects = engine.touchesChanged(ids.filter { $0 != winner })
         #expect(engine.phase == .tracking)
         #expect(effects == [.scheduleTimer(after: .milliseconds(1500), generation: 2)])
     }

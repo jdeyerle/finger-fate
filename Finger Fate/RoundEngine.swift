@@ -33,6 +33,8 @@ struct RoundEngine<Generator: RandomNumberGenerator> {
     }
 
     mutating func touchesChanged(_ ids: [TouchID]) -> [Effect] {
+        // a chosen winner stays locked while their finger is down; losers lifting can't restart the round
+        if case let .selected(winner) = phase, ids.contains(winner) { return [] }
         guard Set(ids) != Set(candidates) else { return [] }
         generation += 1
         guard !ids.isEmpty else {
