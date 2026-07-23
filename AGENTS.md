@@ -83,6 +83,8 @@ Prefer values that do not change. Mutation is allowed when it is the idiomatic S
 
 ## Testing
 
+- During development, run only unit tests: `xcodebuild test -scheme "Finger Fate" -destination 'platform=iOS Simulator,name=iPhone 17'` uses the default `UnitTests.xctestplan`, which excludes the slow UI tests.
+- Do not run the UI tests locally unless explicitly asked; CI runs the full suite via `-testPlan AllTests` on every PR.
 - Use Swift Testing (`import Testing`, `@Test`, `#expect`) in `Finger FateTests`.
 - Assert observable behavior (inputs → outputs): selection fairness constraints, winner counts, reset clearing state, edge cases (0 / 1 / many touches).
 - Name tests after the behavior: `selectsExactlyRequestedWinnerCount`, `resetClearsActiveTouches`.
