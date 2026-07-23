@@ -26,7 +26,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color.black
 
             ForEach(Array(touches.keys), id: \.self) { id in
                 if let point = touches[id] {
@@ -45,8 +45,9 @@ struct ContentView: View {
             }
 
             MultiTouchView(onChange: handleTouches)
-                .ignoresSafeArea()
         }
+        // blobs must share the full-screen space TrackingView reports touches in
+        .ignoresSafeArea()
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
         .onAppear {
